@@ -2,6 +2,7 @@
 import networkx as nx
 import pulp as pl
 
+# Define Graph creation
 def createGraph(n):
     GS = nx.DiGraph()
     for i in range(n):
