@@ -128,7 +128,7 @@ for s, subgraph in enumerate(GS):
     #C6 constraint
 for s in range(len(GS)):
     problem += (
-        pl.lpSum(phi[(s, k)] for k in N.nodes) == 1,
+        pl.lpSum(phi[(s, k)] for k in N.nodes) == pi[s],
         f'C6_{s}'
     )
     
