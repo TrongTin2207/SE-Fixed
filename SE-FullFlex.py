@@ -20,44 +20,35 @@ def create_physical_network(num_nodes: int, node_requirements: list[int]) -> nx.
         G.add_edge(i + 1, i, a=10)
     return G
 
-def create_subgraph(num_nodes: int, node_requirements: list[int]) -> nx.DiGraph:
+def create_slice_configurations(slice_id: int, num_config: int, sizes: list[int], node_requirements: list[list[int]]) -> list[nx.DiGraph]:
     """
-    Tạo một đồ thị con với số lượng node và yêu cầu tài nguyên cho từng node.
+    Tạo các cấu hình cho slice với số lượng node và yêu cầu tài nguyên cho từng node.
     
     Parameters:
-    num_nodes (int): Số lượng node trong đồ thị con.
-    node_requirements (list[int]): Danh sách yêu cầu tài nguyên của từng node.
+    slice_id (int): ID của slice.
+    num_config (int): Số lượng cấu hình cho slice.
+    sizes (list[int]): Danh sách kích thước của từng cấu hình.
+    node_requirements (list[list[int]]): Danh sách yêu cầu tài nguyên của từng node trong các cấu hình.
     
     Returns:
-    nx.DiGraph: Đồ thị con đã tạo.
+    list[nx.DiGraph]: Danh sách các cấu hình đã tạo cho slice.
     """
-    G = nx.DiGraph()
-    for i in range(num_nodes):
-        G.add_node(i, r=node_requirements[i])
-    for i in range(num_nodes - 1):
-        G.add_edge(i, i + 1, r=5)
-    return G
+    configurations = []
+    for config_id in range(num_config):
+        G = nx.DiGraph()
+        for i in range(sizes[config_id]):
+            G.add_node(i, r=node_requirements[config_id][i])
+        for i in range(sizes[config_id] - 1):
+            G.add_edge(i, i + 1, r=5)
+        configurations.append(G)
+    return configurations
 
-def create_subgraph_set(K: int, sizes: list[int], requirements: list[list[int]]) -> list[nx.DiGraph]:
+def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpProblem:
     """
-    Tạo tập hợp K đồ thị con với các kích thước khác nhau và yêu cầu tài nguyên cho từng node.
+    Xây dựng bài toán ILP cho việc ánh xạ các slice với nhiều cấu hình vào mạng vật lý.
     
     Parameters:
-    K (int): Số lượng đồ thị con cần tạo.
-    sizes (list[int]): Danh sách kích thước của từng đồ thị con.
-    requirements (list[list[int]]): Danh sách yêu cầu tài nguyên của từng node trong các đồ thị con.
-    
-    Returns:
-    list[nx.DiGraph]: Danh sách các đồ thị con đã tạo.
-    """
-    return [create_subgraph(size, req) for size, req in zip(sizes, requirements)]
-
-def build_ilp_problem(GS: list[nx.DiGraph], N: nx.DiGraph) -> pl.LpProblem:
-    """
-    Xây dựng bài toán ILP cho việc ánh xạ các đồ thị con vào mạng vật lý.
-    
-    Parameters:
-    GS (list[nx.DiGraph]): Danh sách các đồ thị con.
+    slices (list[list[nx.DiGraph]]): Danh sách các slice với nhiều cấu hình.
     N (nx.DiGraph): Đồ thị mạng vật lý.
     
     Returns:
@@ -65,32 +56,33 @@ def build_ilp_problem(GS: list[nx.DiGraph], N: nx.DiGraph) -> pl.LpProblem:
     """
     problem = pl.LpProblem(name='Graph-Mapping', sense=pl.LpMaximize)
 
-    # Decision variables for nodes and edges
     xNode = pl.LpVariable.dicts("xNode",
-                          ((s, n, i)
-                          for s, subgraph in enumerate(GS)
+                          ((s, k, n, i)
+                          for s, slice_configs in enumerate(slices)
+                          for k, subgraph in enumerate(slice_configs)
                           for n in subgraph.nodes
                           for i in N.nodes),
                           cat=pl.LpBinary
     )
 
     xEdge = pl.LpVariable.dicts("xEdge", 
-                                ((s, w, v, i, j) 
-                                 for s, subgraph in enumerate(GS) 
+                                ((s, k, w, v, i, j) 
+                                 for s, slice_configs in enumerate(slices)
+                                 for k, subgraph in enumerate(slice_configs)
                                  for w, v in subgraph.edges 
                                  for i, j in N.edges),
                                 cat=pl.LpBinary)
 
-    pi = pl.LpVariable.dicts("pi", (s for s in range(len(GS))), cat=pl.LpBinary)
+    pi = pl.LpVariable.dicts("pi", (s for s in range(len(slices))), cat=pl.LpBinary)
     phi = pl.LpVariable.dicts("phi", 
                               ((s, k) 
-                               for s in range(len(GS)) 
-                               for k in N.nodes),
+                               for s in range(len(slices)) 
+                               for k in range(len(slices[s]))),
                               cat=pl.LpBinary)
     z = pl.LpVariable.dicts("z", 
-                            ((s, k) 
-                             for s in range(len(GS)) 
-                             for k in N.nodes),
+                            ((s, k)
+                             for s in range(len(slices)) 
+                             for k in range(len(slices[s]))),
                             cat=pl.LpBinary)
 
     # Attribute of the target graph
@@ -98,81 +90,79 @@ def build_ilp_problem(GS: list[nx.DiGraph], N: nx.DiGraph) -> pl.LpProblem:
     aEdge = nx.get_edge_attributes(N, "a")
 
     # Constraints
-    for s, subgraph in enumerate(GS):
-        rNode = nx.get_node_attributes(subgraph,"r")
-        rEdge = nx.get_edge_attributes(subgraph,"r")
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            rNode = nx.get_node_attributes(subgraph, "r")
+            rEdge = nx.get_edge_attributes(subgraph, "r")
 
-        # C1 constraint
-        for i in N.nodes:
-            problem += (
-                pl.lpSum(
-                    xNode[(s, n, i)] * rNode[n]
-                    for n in subgraph.nodes
-                ) <= aNode[i] * pl.lpSum(phi[(s, k)] for k in N.nodes),
-                f'C1_{s}_{i}'
-            )
-
-        # C2 constraint
-        for i, j in N.edges:
-            problem += (
-                pl.lpSum(
-                    xEdge[(s, w, v, i, j)] * rEdge[(w, v)]
-                    for w, v in subgraph.edges
-                ) <= aEdge[(i, j)] * pl.lpSum(phi[(s, k)] for k in N.nodes),
-                f'C2_{s}_{i}_{j}'
-            )
-
-        # C3 constraint
-        for i in N.nodes:
-            for k in N.nodes:
+            # C1 constraint
+            for i in N.nodes:
                 problem += (
                     pl.lpSum(
-                        xNode[(s, n, i)]
+                        xNode[(s, k, n, i)] * rNode[n]
+                        for n in subgraph.nodes
+                    ) <= aNode[i] * phi[(s, k)],
+                    f'C1_{s}_{k}_{i}'
+                )
+
+            # C2 constraint
+            for i, j in N.edges:
+                problem += (
+                    pl.lpSum(
+                        xEdge[(s, k, w, v, i, j)] * rEdge[(w, v)]
+                        for w, v in subgraph.edges
+                    ) <= aEdge[(i, j)] * phi[(s, k)],
+                    f'C2_{s}_{k}_{i}_{j}'
+                )
+
+            # C3 constraint
+            for i in N.nodes:
+                problem += (
+                    pl.lpSum(
+                        xNode[(s, k, n, i)]
                         for n in subgraph.nodes
                     ) <= z[(s, k)],
-                    f'C3_{s}_{i}_{k}'
+                    f'C3_{s}_{k}_{i}'
                 )
 
-        # C4 constraint
-        for n in subgraph.nodes:
-            for k in N.nodes:
-                problem += (    
+            # C4 constraint
+            for n in subgraph.nodes:
+                problem += (
                     pl.lpSum(
-                        xNode[(s, n, i)]
+                        xNode[(s, k, n, i)]
                         for i in N.nodes
-                    ) == z[(s, k)],
-                    f'C4_{s}_{n}_{k}'
+                    ) == phi[(s, k)],
+                    f'C4_{s}_{k}_{n}'
                 )
 
-        # C5 constraints
-        big_M = 100  # Define a sufficiently large value for M
-        for (w, v) in subgraph.edges:
-            for k in N.nodes:
+            # C5 constraints
+            big_M = 100  # Define a sufficiently large value for M
+            for (w, v) in subgraph.edges:
                 for i in N.nodes:
                     for j in N.nodes:
                         if i != j:
-                            if (s, w, v, i, j) in xEdge and (s, w, v, j, i) in xEdge:
+                            if (s, k, w, v, i, j) in xEdge and (s, k, w, v, j, i) in xEdge:
                                 problem += (
-                                    xEdge[(s, w, v, i, j)] - xEdge[(s, w, v, j, i)] 
-                                    - (xNode[(s, v, i)] - xNode[(s, w, i)]) <= big_M * (1 - phi[(s, k)]),
-                                    f'C5_{s}_{w}_{v}_{i}_{j}_{k}_1'
+                                    xEdge[(s, k, w, v, i, j)] - xEdge[(s, k, w, v, j, i)] 
+                                    - (xNode[(s, k, v, i)] - xNode[(s, k, w, i)]) <= big_M * (1 - phi[(s, k)]),
+                                    f'C5_{s}_{k}_{w}_{v}_{i}_{j}_1'
                                 )
                                 problem += (
-                                    xEdge[(s, w, v, i, j)] - xEdge[(s, w, v, j, i)] 
-                                    - (xNode[(s, v, i)] - xNode[(s, w, i)]) >= -big_M * (1 - phi[(s, k)]),
-                                    f'C5_{s}_{w}_{v}_{i}_{j}_{k}_2'
+                                    xEdge[(s, k, w, v, i, j)] - xEdge[(s, k, w, v, j, i)] 
+                                    - (xNode[(s, k, v, i)] - xNode[(s, k, w, i)]) >= -big_M * (1 - phi[(s, k)]),
+                                    f'C5_{s}_{k}_{w}_{v}_{i}_{j}_2'
                                 )
-    
+
     # C6 constraint
-    for s in range(len(GS)):
+    for s in range(len(slices)):
         problem += (
-            pl.lpSum(phi[(s, k)] for k in N.nodes) == pi[s],
+            pl.lpSum(phi[(s, k)] for k in range(len(slices[s]))) == pi[s],
             f'C6_{s}'
         )
-    
+
     # C7 constraint
-    for s in range(len(GS)):
-        for k in N.nodes:
+    for s in range(len(slices)):
+        for k in range(len(slices[s])):
             problem += (
                 z[(s, k)] <= pi[s],
                 f'C7_{s}_{k}_1'
@@ -182,37 +172,52 @@ def build_ilp_problem(GS: list[nx.DiGraph], N: nx.DiGraph) -> pl.LpProblem:
                 f'C7_{s}_{k}_2'
             ) 
             problem += (
-                z[(s, k)] <= pi[s] - phi[(s, k)] - 1,
+                z[(s, k)] >= pi[s] + phi[(s, k)] - 1,
                 f'C7_{s}_{k}_3'
             )
 
     # Objective function
-    problem += pl.lpSum(pi[s] for s in range(len(GS)))
+    gamma = 0.99999
+    problem += gamma * pl.lpSum(pi[s] for s in range(len(slices))) - (1 - gamma) * pl.lpSum(xEdge[(s, k, w, v, i, j)] * rEdge[(w, v)]
+    for s, slice_configs in enumerate(slices) 
+    for k, subgraph in enumerate(slice_configs)
+    for w, v in subgraph.edges
+    for i, j in N.edges)
 
     return problem
 
 def main():
     # Tạo đồ thị mạng vật lý với yêu cầu tài nguyên cho từng node
-    N_requirements = [100, 100, 100, 100, 100]
+    N_requirements = [10, 10, 10, 10, 10]
     N = create_physical_network(5, N_requirements)
     
-    # Tạo tập hợp các đồ thị con với yêu cầu tài nguyên cho từng node
-    sizes = [3, 3, 3]
-    requirements = [
-        [10, 20, 40],
-        [10, 20, 30],
-        [10, 10, 10]
+    # Tạo tập hợp các slice với nhiều cấu hình và yêu cầu tài nguyên cho từng node
+    sizes = [
+        [3, 2],
+        [2, 4],
+        [3, 3]
     ]
-    GS = create_subgraph_set(3, sizes, requirements)
+    requirements = [
+        [[3, 3, 3], [2, 2]],
+        [[4, 4], [2, 2, 2, 2]],
+        [[1, 1, 1], [2, 2, 2]]
+    ]
     
+    slices = []
+    for slice_id in range(3):
+        slice_configs = create_slice_configurations(slice_id, len(sizes[slice_id]), sizes[slice_id], requirements[slice_id])
+        slices.append(slice_configs)
+
     # Xây dựng bài toán ILP
-    problem = build_ilp_problem(GS, N)
+    ilp_problem = build_ilp_problem(slices, N)
+
+    # Giải bài toán ILP
+    ilp_problem.solve()
     
-    print(problem)
-    
-    # Giải bài toán
-    result = problem.solve()
-    print(pl.LpStatus[result])
-    
+    # In kết quả
+    for var in ilp_problem.variables():
+        print(f'{var.name}: {var.value()}')
+    print(f'Tối ưu hóa giá trị: {pl.value(ilp_problem.objective)}')
+
 if __name__ == '__main__':
     main()
