@@ -20,7 +20,7 @@ def create_physical_network(num_nodes: int, node_requirements: list[int]) -> nx.
         G.add_edge(i + 1, i, a=10)
     return G
 
-def create_slice_configurations(slice_id: int, num_config: int, sizes: list[int], node_requirements: list[list[int]]) -> list[nx.DiGraph]:
+def create_slice_configurations(num_config: int, sizes: list[int], node_requirements: list[list[int]]) -> list[nx.DiGraph]:
     """
     Tạo các cấu hình cho slice với số lượng node và yêu cầu tài nguyên cho từng node.
     
@@ -206,7 +206,7 @@ def main():
     
     slices = []
     for slice_id in range(3):
-        slice_configs = create_slice_configurations(slice_id, len(sizes[slice_id]), sizes[slice_id], requirements[slice_id])
+        slice_configs = create_slice_configurations(len(sizes[slice_id]), sizes[slice_id], requirements[slice_id])
         slices.append(slice_configs)
 
     # Xây dựng bài toán ILP
