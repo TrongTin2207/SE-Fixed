@@ -1,7 +1,7 @@
 import networkx as nx
 import pulp as pl
 
-def create_physical_network(num_nodes: int, node_requirements: list[int]) -> nx.DiGraph:
+def create_physical_network(num_nodes: int, node_requirements: list[int], edge_requirements: list[int]) -> nx.DiGraph:
     """
     Tạo đồ thị mạng vật lý với số lượng node và yêu cầu tài nguyên cho từng node.
     
@@ -16,11 +16,11 @@ def create_physical_network(num_nodes: int, node_requirements: list[int]) -> nx.
     for i in range(num_nodes):
         G.add_node(i, a=node_requirements[i])
     for i in range(num_nodes - 1):
-        G.add_edge(i, i + 1, a=10)
-        G.add_edge(i + 1, i, a=10)
+        G.add_edge(i, i + 1, a = edge_requirements[i])
+        G.add_edge(i + 1, i, a = edge_requirements[i])
     return G
 
-def create_slice_configurations(num_config: int, sizes: list[int], node_requirements: list[list[int]]) -> list[nx.DiGraph]:
+def create_slice_configurations(num_config: int, sizes: list[int], node_requirements: list[list[int]], edge_requirement: list[list[int]]) -> list[nx.DiGraph]:
     """
     Tạo các cấu hình cho slice với số lượng node và yêu cầu tài nguyên cho từng node.
     
@@ -39,7 +39,7 @@ def create_slice_configurations(num_config: int, sizes: list[int], node_requirem
         for i in range(sizes[config_id]):
             G.add_node(i, r=node_requirements[config_id][i])
         for i in range(sizes[config_id] - 1):
-            G.add_edge(i, i + 1, r=5)
+            G.add_edge(i, i + 1, r=edge_requirement[config_id][i])
         configurations.append(G)
     return configurations
 
@@ -190,7 +190,8 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
 def main():
     # Tạo đồ thị mạng vật lý với yêu cầu tài nguyên cho từng node
     N_requirements = [10, 10, 10, 10, 10]
-    N = create_physical_network(5, N_requirements)
+    E_requirements = [5, 5, 5, 5]
+    N = create_physical_network(5, N_requirements, E_requirements)
     
     # Tạo tập hợp các slice với nhiều cấu hình và yêu cầu tài nguyên cho từng node
     sizes = [
@@ -198,15 +199,20 @@ def main():
         [2, 4],
         [3, 3]
     ]
-    requirements = [
+    node_requirements = [
         [[3, 3, 3], [2, 2]],
         [[4, 4], [2, 2, 2, 2]],
         [[1, 1, 1], [2, 2, 2]]
     ]
+    edge_requirements = [
+        [[2, 2], [1]],
+        [[3], [1, 1, 1]],
+        [[2, 2], [1, 1]]
+    ]
     
     slices = []
     for slice_id in range(3):
-        slice_configs = create_slice_configurations(len(sizes[slice_id]), sizes[slice_id], requirements[slice_id])
+        slice_configs = create_slice_configurations(len(sizes[slice_id]), sizes[slice_id], node_requirements[slice_id], edge_requirements[slice_id])
         slices.append(slice_configs)
 
     # Xây dựng bài toán ILP
@@ -219,7 +225,7 @@ def main():
     for var in ilp_problem.variables():
         print(f'{var.name}: {var.value()}')
     print(f'Tối ưu hóa giá trị: {pl.value(ilp_problem.objective)}')
-    print (pl.LpStatus[result])
+    print(pl.LpStatus[result])
 
 if __name__ == '__main__':
     main()
