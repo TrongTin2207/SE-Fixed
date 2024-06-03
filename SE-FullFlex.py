@@ -182,8 +182,9 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
     for s, slice_configs in enumerate(slices) 
     for k, subgraph in enumerate(slice_configs)
     for w, v in subgraph.edges
-    for i, j in N.edges)
-
+    for i, j in N.edges 
+    if (s, k, w, v, i, j) in xEdge and (w, v) in xEdge)
+    
     return problem
 
 def main():
@@ -212,12 +213,13 @@ def main():
     ilp_problem = build_ilp_problem(slices, N)
 
     # Giải bài toán ILP
-    ilp_problem.solve()
+    result = ilp_problem.solve()
     
     # In kết quả
     for var in ilp_problem.variables():
         print(f'{var.name}: {var.value()}')
     print(f'Tối ưu hóa giá trị: {pl.value(ilp_problem.objective)}')
+    print (pl.LpStatus[result])
 
 if __name__ == '__main__':
     main()
