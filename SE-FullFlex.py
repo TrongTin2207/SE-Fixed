@@ -186,7 +186,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
     for k, subgraph in enumerate(slice_configs)
     for v, w in subgraph.edges
     for i, j in N.edges 
-    if (s, k, (i, j), (v, w)) in xEdge)
+    if (s, k, (i, j), (v, w)) in xEdge and (v,w) in xEdge)
     
     return problem
 
