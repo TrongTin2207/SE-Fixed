@@ -112,7 +112,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
                 )
 
             # C2: Ensure that the total resource demand of virtual edges mapped to a physical edge does not exceed its capacity
-            for i, j in N.edges:
+            for (i, j) in N.edges:
                 problem += (
                     pl.lpSum(
                         xEdge[(s, k, (i, j), (v, w))] * rEdge[(v, w)]
@@ -142,17 +142,17 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
                 )
 
             # C5: Ensure the flow conservation for virtual edges using a big-M method for relaxation
-            big_M = 100  # Define a sufficiently large value for M
-            for v, w in subgraph.edges:
-                for i, j in N.edges:
+            M = 100  # Define a sufficiently large value for M
+            for (v, w) in subgraph.edges:
+                for (i, j) in N.edges:
                     problem += (
                         xEdge[(s, k, (i, j), (v, w))] - xEdge[(s, k, (j, i), (v, w))] 
-                        - (xNode[(s, k, i, v)] - xNode[(s, k, j, v)]) <= big_M * (1 - phi[(s, k)]),
+                        - (xNode[(s, k, i, v)] - xNode[(s, k, j, v)]) <= M * (1 - phi[(s, k)]),
                         f'C5_{s}_{k}_{v}_{w}_{i}_{j}_1'
                     )
                     problem += (
                         xEdge[(s, k, (i, j), (v, w))] - xEdge[(s, k, (j, i), (v, w))]
-                        - (xNode[(s, k, i, v)] - xNode[(s, k, j, v)]) >= -big_M * (1 - phi[(s, k)]),
+                        - (xNode[(s, k, i, v)] - xNode[(s, k, j, v)]) >= -M * (1 - phi[(s, k)]),
                         f'C5_{s}_{k}_{v}_{w}_{i}_{j}_2'
                     )
 
@@ -225,6 +225,7 @@ def main():
     ilp_problem.solve()
     
     # Print results
+    print(ilp_problem)
     for var in ilp_problem.variables():
         print(f'{var.name}: {var.varValue}')
     print(f'Optimal value: {pl.value(ilp_problem.objective)}')
