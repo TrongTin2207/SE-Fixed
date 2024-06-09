@@ -44,13 +44,13 @@ def create_slice_configurations(num_config: int, sizes: list[int], node_requirem
         configurations.append(G)
     return configurations
 
-def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpProblem:
+def build_ilp_problem(slices: list[list[nx.DiGraph]], PHY: nx.DiGraph) -> pl.LpProblem:
     """
     Build the ILP problem for mapping slices with multiple configurations onto a physical network.
     
     Parameters:
     slices (list[list[nx.DiGraph]]): List of slices with multiple configurations.
-    N (nx.DiGraph): The physical network graph.
+    PHY (nx.DiGraph): The physical network graph.
     
     Returns:
     pl.LpProblem: The built ILP problem.
@@ -58,42 +58,42 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
     problem = pl.LpProblem(name='Graph-Mapping', sense=pl.LpMaximize)
 
     # Define binary variables for node mapping
-    xNode = pl.LpVariable.dicts("xNode",
-                          ((s, k, i, v)
+    xNode = pl.LpVariable.dicts(name = "xNode",
+                          indices = ((s, k, i, v)
                           for s, slice_configs in enumerate(slices)
                           for k, subgraph in enumerate(slice_configs)
                           for v in subgraph.nodes
-                          for i in N.nodes),
+                          for i in PHY.nodes),
                           cat=pl.LpBinary
     )
 
     # Define binary variables for edge mapping
-    xEdge = pl.LpVariable.dicts("xEdge", 
-                                ((s, k, (i, j), (v, w)) 
+    xEdge = pl.LpVariable.dicts(name = "xEdge", 
+                                indices = ((s, k, (i, j), (v, w)) 
                                  for s, slice_configs in enumerate(slices)
                                  for k, subgraph in enumerate(slice_configs)
                                  for v, w in subgraph.edges 
-                                 for i, j in N.edges),
+                                 for i, j in PHY.edges),
                                 cat=pl.LpBinary)
 
     # Define binary variables to indicate whether a slice is mapped
-    pi = pl.LpVariable.dicts("pi", (s for s in range(len(slices))), cat=pl.LpBinary)
+    pi = pl.LpVariable.dicts(name = "pi", indices = (s for s in range(len(slices))), cat=pl.LpBinary)
     # Define binary variables to indicate whether a slice configuration is chosen
-    phi = pl.LpVariable.dicts("phi", 
-                              ((s, k) 
+    phi = pl.LpVariable.dicts(name = "phi", 
+                              indices = ((s, k) 
                                for s in range(len(slices)) 
                                for k in range(len(slices[s]))),
                               cat=pl.LpBinary)
     # Define auxiliary binary variables for constraint management
-    z = pl.LpVariable.dicts("z", 
-                            ((s, k)
+    z = pl.LpVariable.dicts(name = "z", 
+                            indices = ((s, k)
                              for s in range(len(slices)) 
                              for k in range(len(slices[s]))),
                             cat=pl.LpBinary)
 
     # Attributes of the physical network
-    aNode = nx.get_node_attributes(N, "a")
-    aEdge = nx.get_edge_attributes(N, "a")
+    aNode = nx.get_node_attributes(PHY, "a")
+    aEdge = nx.get_edge_attributes(PHY, "a")
 
     # Constraints
     for s, slice_config in enumerate(slices):
@@ -102,7 +102,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
             rEdge = nx.get_edge_attributes(subgraph, "r")
 
             # C1: Ensure that the total resource demand of virtual nodes mapped to a physical node does not exceed its capacity
-            for i in N.nodes:
+            for i in PHY.nodes:
                 problem += (
                     pl.lpSum(
                         xNode[(s, k, i, v)] * rNode[v]
@@ -112,7 +112,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
                 )
 
             # C2: Ensure that the total resource demand of virtual edges mapped to a physical edge does not exceed its capacity
-            for (i, j) in N.edges:
+            for (i, j) in PHY.edges:
                 problem += (
                     pl.lpSum(
                         xEdge[(s, k, (i, j), (v, w))] * rEdge[(v, w)]
@@ -122,7 +122,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
                 )
 
             # C3: Ensure that each physical node hosts at most one virtual node from each slice configuration
-            for i in N.nodes:
+            for i in PHY.nodes:
                 problem += (
                     pl.lpSum(
                         xNode[(s, k, i, v)]
@@ -136,7 +136,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
                 problem += (
                     pl.lpSum(
                         xNode[(s, k, i, v)]
-                        for i in N.nodes
+                        for i in PHY.nodes
                     ) == phi[(s, k)],
                     f'C4_{s}_{k}_{v}'
                 )
@@ -144,7 +144,7 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
             # C5: Ensure the flow conservation for virtual edges using a big-M method for relaxation
             M = 100  # Define a sufficiently large value for M
             for (v, w) in subgraph.edges:
-                for (i, j) in N.edges:
+                for (i, j) in PHY.edges:
                     problem += (
                         xEdge[(s, k, (i, j), (v, w))] - xEdge[(s, k, (j, i), (v, w))] 
                         - (xNode[(s, k, i, v)] - xNode[(s, k, j, v)]) <= M * (1 - phi[(s, k)]),
@@ -181,22 +181,101 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], N: nx.DiGraph) -> pl.LpPro
 
     # Objective function: Maximize the number of mapped slices and minimize resource usage
     gamma = 0.99999
-    problem += gamma * pl.lpSum(pi[s] for s in range(len(slices))) - (1 - gamma) * pl.lpSum(xEdge[(s, k, (i, j), (v, w))] * rEdge[(v, w)]
-    for s, slice_configs in enumerate(slices) 
+    problem += gamma * pl.lpSum(pi[s] for s in range(len(slices))) - (1 - gamma) * pl.lpSum(
+    xEdge[(s, k, (i, j), (v, w))] * rEdge[(v, w)] if (v, w) in rEdge else 0
+    for s, slice_configs in enumerate(slices)
     for k, subgraph in enumerate(slice_configs)
     for v, w in subgraph.edges
-    for i, j in N.edges 
-    if (s, k, (i, j), (v, w)) in xEdge and (v,w) in xEdge)
+    for i, j in PHY.edges
+    )
     
     return problem
 
+
+def check_solution(problem, slices, PHY):
+    # Extract the variables from the solved problem
+    variables = {v.name: v.varValue for v in problem.variables()}
+
+    # Extract node and edge attributes from the physical network
+    aNode = nx.get_node_attributes(PHY, "a")
+    aEdge = nx.get_edge_attributes(PHY, "a")
+
+    # Function to get variable value with default 0 if not set
+    def get_var(name):
+        return variables.get(name, 0)
+
+    # Check node capacity constraints
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            rNode = nx.get_node_attributes(subgraph, "r")
+            for i in PHY.nodes:
+                total_demand = sum(get_var(f'xNode_{s}_{k}_{i}_{v}') * rNode[v] for v in subgraph.nodes)
+                capacity = aNode[i] * get_var(f'phi_{s}_{k}')
+                if total_demand > capacity:
+                    print(f"Node capacity constraint violated for physical node {i} in slice {s}, config {k}.")
+                    return False
+
+    # Check edge capacity constraints
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            rEdge = nx.get_edge_attributes(subgraph, "r")
+            for (i, j) in PHY.edges:
+                total_demand = sum(get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * rEdge.get((v, w), 0) for v, w in subgraph.edges)
+                capacity = aEdge[(i, j)] * get_var(f'phi_{s}_{k}')
+                if total_demand > capacity:
+                    print(f"Edge capacity constraint violated for physical edge ({i}, {j}) in slice {s}, config {k}.")
+                    return False
+
+    # Check one virtual node per physical node per slice constraint
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            for i in PHY.nodes:
+                total_virtual_nodes = sum(get_var(f'xNode_{s}_{k}_{i}_{v}') for v in subgraph.nodes)
+                if total_virtual_nodes > get_var(f'z_{s}_{k}'):
+                    print(f"One virtual node per physical node constraint violated for node {i} in slice {s}, config {k}.")
+                    return False
+
+    # Check each virtual node mapped to exactly one physical node if chosen
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            for v in subgraph.nodes:
+                total_mappings = sum(get_var(f'xNode_{s}_{k}_{i}_{v}') for i in PHY.nodes)
+                if total_mappings != get_var(f'phi_{s}_{k}'):
+                    print(f"Virtual node {v} not mapped to exactly one physical node in slice {s}, config {k}.")
+                    return False
+
+    # Check flow conservation constraints
+    M = 100
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            for (v, w) in subgraph.edges:
+                for (i, j) in PHY.edges:
+                    if abs(get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') - get_var(f'xEdge_{s}_{k}_{j}_{i}_{v}_{w}') - (get_var(f'xNode_{s}_{k}_{i}_{v}') - get_var(f'xNode_{s}_{k}_{j}_{v}'))) > M * (1 - get_var(f'phi_{s}_{k}')):
+                        print(f"Flow conservation constraint violated for edge ({i}, {j}) in slice {s}, config {k}.")
+                        return False
+
+    # Check exactly one configuration chosen per slice
+    for s in range(len(slices)):
+        total_configurations = sum(get_var(f'phi_{s}_{k}') for k in range(len(slices[s])))
+        if total_configurations != get_var(f'pi_{s}'):
+            print(f"Exactly one configuration not chosen for slice {s}.")
+            return False
+
+    # Check consistency between z, pi, and phi variables
+    for s in range(len(slices)):
+        for k in range(len(slices[s])):
+            if get_var(f'z_{s}_{k}') > get_var(f'pi_{s}') or get_var(f'z_{s}_{k}') > get_var(f'phi_{s}_{k}') or get_var(f'z_{s}_{k}') < get_var(f'pi_{s}') + get_var(f'phi_{s}_{k}') - 1:
+                print(f"Consistency constraints violated for slice {s}, config {k}.")
+                return False
+
+    print("All constraints are satisfied.")
+    return True
+
 def main():
-    # Create the physical network graph with resource requirements for each node
     N_requirements = [10, 10, 10, 10, 10]
     E_requirements = [5, 5, 5, 5]
     N = create_physical_network(5, N_requirements, E_requirements)
-    
-    # Create slices with multiple configurations and resource requirements for each node
+
     sizes = [
         [3, 2],
         [2, 4],
@@ -212,24 +291,24 @@ def main():
         [[3], [1, 1, 1]],
         [[2, 2], [1, 1]]
     ]
-    
+
     slices = []
     for slice_id in range(3):
         slice_configs = create_slice_configurations(len(sizes[slice_id]), sizes[slice_id], node_requirements[slice_id], edge_requirements[slice_id])
         slices.append(slice_configs)
 
-    # Build the ILP problem
     ilp_problem = build_ilp_problem(slices, N)
 
-    # Solve the ILP problem
     ilp_problem.solve()
-    
-    # Print results
+
     print(ilp_problem)
     for var in ilp_problem.variables():
         print(f'{var.name}: {var.varValue}')
     print(f'Optimal value: {pl.value(ilp_problem.objective)}')
     print(pl.LpStatus[ilp_problem.status])
+
+    # Check solution
+    check_solution(ilp_problem, slices, N)
 
 if __name__ == '__main__':
     main()
