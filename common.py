@@ -193,6 +193,17 @@ def build_ilp_problem(slices: list[list[nx.DiGraph]], PHY: nx.DiGraph) -> pl.LpP
 
 
 def check_solution(problem, slices, PHY):
+    """
+    Check the solution of the ILP problem to ensure it satisfies all constraints.
+    
+    Parameters:
+    problem (pl.LpProblem): The solved ILP problem.
+    slices (list[list[nx.DiGraph]]): List of slices with multiple configurations.
+    PHY (nx.DiGraph): The physical network graph.
+    
+    Returns:
+    bool: True if all constraints are satisfied, False otherwise.
+    """
     # Extract the variables from the solved problem
     variables = {v.name: v.varValue for v in problem.variables()}
 
@@ -200,28 +211,25 @@ def check_solution(problem, slices, PHY):
     aNode = nx.get_node_attributes(PHY, "a")
     aEdge = nx.get_edge_attributes(PHY, "a")
 
-    rNode = nx.get_node_attributes(subgraph, "r")
-    rEdge = nx.get_edge_attributes(subgraph, "r")
-    # Function to get variable value with default 0 if not set
+    for s, slice_config in enumerate(slices):
+        for k, subgraph in enumerate(slice_config):
+            rNode = nx.get_node_attributes(subgraph, "r")
+            rEdge = nx.get_edge_attributes(subgraph, "r")
+    
     def get_var(name):
         return variables.get(name, 0)
 
     # Check node capacity constraints
-    for s, slice_config in enumerate(slices):
-        for k, subgraph in enumerate(slice_config):
-            if not all(sum(get_var(f'xNode_{s}_{k}_{i}_{v}') * rNode[v] for v in subgraph.nodes) <= aNode[i] * get_var(f'phi_{s}_{k}') for i in PHY.nodes):
-                print(f"Constraint 1 failed")
-                return False
+    if not all(pl.lpSum(get_var(f'xNode_{s}_{k}_{i}_{v}') * rNode[v] for v in subgraph.nodes) <= aNode[i] * get_var(f'phi_{s}_{k}') for i in PHY.nodes):
+        print(f"Constraint 1 failed")
+        return False
 
     # Check edge capacity constraints
-    for s, slice_config in enumerate(slices):
-        for k, subgraph in enumerate(slice_config):
-            for (i, j) in PHY.edges:
-                total_demand = sum(get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * rEdge.get((v, w), 0) for v, w in subgraph.edges)
-                capacity = aEdge[(i, j)] * get_var(f'phi_{s}_{k}')
-                if total_demand > capacity:
-                    print(f"Constraint 2 failed")
-                    return False
+
+    if not all (pl.lpSum(get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * rEdge.get((v, w), 0) for (v, w) in subgraph.edges) <= aEdge[(i, j)] * get_var(f'phi_{s}_{k}') 
+                         for (i,j) in PHY.nodes):
+        print(f"Constraint 2 failed)")
+        return False
 
     # Check one virtual node per physical node per slice constraint
     for s, slice_config in enumerate(slices):
@@ -232,37 +240,36 @@ def check_solution(problem, slices, PHY):
                     print(f"Constraint 3 failed")
                     return False
 
-    # Check each virtual node mapped to exactly one physical node if chosen
-    for s, slice_config in enumerate(slices):
-        for k, subgraph in enumerate(slice_config):
-            for v in subgraph.nodes:
-                total_mappings = sum(get_var(f'xNode_{s}_{k}_{i}_{v}') for i in PHY.nodes)
-                if total_mappings != get_var(f'phi_{s}_{k}'):
-                    print(f"Virtual node {v} not mapped to exactly one physical node in slice {s}, config {k}.")
-                    return False
+    # Check each virtual node mapped to exactly one physical node if chosen    
+    if not all (pl.lpSum(get_var(f'xNode_{s}_{k}_{i}_{v}') for v in subgraph.nodes 
+                                     for i in PHY.nodes)):
+        print(f"Constraint 4 failed")
+        return False
 
     # Check flow conservation constraints
-    M = 100
-    for s, slice_config in enumerate(slices):
-        for k, subgraph in enumerate(slice_config):
-            for (v, w) in subgraph.edges:
-                for (i, j) in PHY.edges:
-                    if abs(get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') - get_var(f'xEdge_{s}_{k}_{j}_{i}_{v}_{w}') - (get_var(f'xNode_{s}_{k}_{i}_{v}') - get_var(f'xNode_{s}_{k}_{j}_{v}'))) > M * (1 - get_var(f'phi_{s}_{k}')):
-                        print(f"Flow conservation constraint violated for edge ({i}, {j}) in slice {s}, config {k}.")
-                        return False
+    M = 100  # Big-M value for relaxation
+    for (v, w) in subgraph.edges:
+        for (i, j) in PHY.edges:
+            lhs = get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') - get_var(f'xEdge_{s}_{k}_{j}_{i}_{v}_{w}') - (get_var(f'xNode_{s}_{k}_{i}_{v}') - get_var(f'xNode_{s}_{k}_{j}_{v}'))
+            if not (-M * (1 - get_var(f'phi_{s}_{k}')) <= lhs <= M * (1 - get_var(f'phi_{s}_{k}'))):
+                print(f"Constraint 5")
+                return False
 
     # Check exactly one configuration chosen per slice
     for s in range(len(slices)):
         total_configurations = sum(get_var(f'phi_{s}_{k}') for k in range(len(slices[s])))
         if total_configurations != get_var(f'pi_{s}'):
-            print(f"Exactly one configuration not chosen for slice {s}.")
+            print(f"Constraint 6 failed")
             return False
 
     # Check consistency between z, pi, and phi variables
     for s in range(len(slices)):
         for k in range(len(slices[s])):
-            if get_var(f'z_{s}_{k}') > get_var(f'pi_{s}') or get_var(f'z_{s}_{k}') > get_var(f'phi_{s}_{k}') or get_var(f'z_{s}_{k}') < get_var(f'pi_{s}') + get_var(f'phi_{s}_{k}') - 1:
-                print(f"Consistency constraints violated for slice {s}, config {k}.")
+            z_var = get_var(f'z_{s}_{k}')
+            pi_var = get_var(f'pi_{s}')
+            phi_var = get_var(f'phi_{s}_{k}')
+            if z_var > pi_var or z_var > phi_var or z_var < pi_var + phi_var - 1:
+                print(f"Constraint 7 failed")
                 return False
 
     print("All constraints are satisfied.")
