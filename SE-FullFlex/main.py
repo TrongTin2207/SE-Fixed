@@ -1,7 +1,7 @@
 import networkx as nx
 import pulp as pl
 from common import *
-
+from Validate import *
 
 def main():
     N_requirements = [10, 10, 10, 10, 10]
@@ -38,9 +38,7 @@ def main():
         print(f'{var.name}: {var.varValue}')
     print(f'Optimal value: {pl.value(ilp_problem.objective)}')
     print(pl.LpStatus[ilp_problem.status])
-
-    # Check solution
+    
     check_solution(ilp_problem, slices, N)
-
 if __name__ == '__main__':
     main()
