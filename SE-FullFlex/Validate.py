@@ -21,25 +21,34 @@ def check_solution(problem, slices, PHY):
     aNode = nx.get_node_attributes(PHY, "a")
     aEdge = nx.get_edge_attributes(PHY, "a")
 
-    for s, slice_config in enumerate(slices):
-        for k, subgraph in enumerate(slice_config):
-            rNode = nx.get_node_attributes(subgraph, "r")
-            rEdge = nx.get_edge_attributes(subgraph, "r")
+
     
     def get_var(name):
         return variables.get(name, 0)
-
-    # Check node capacity constraints
-    if not all(pl.lpSum(get_var(f'xNode_{s}_{k}_{i}_{v}') * rNode[v] for v in subgraph.nodes) <= aNode[i] * get_var(f'phi_{s}_{k}') for i in PHY.nodes):
-        print(f"Constraint 1 failed")
-        return False
+    
+       # Check node capacity constraints
+    for i in PHY.nodes:
+        node_capacity_used = sum(
+            get_var(f'xNode_{s}_{k}_{i}_{v}') * subgraph.nodes[v]['r']
+            for s, slice_config in enumerate(slices)
+            for k, subgraph in enumerate(slice_config)
+            for v in subgraph.nodes
+        )
+        if node_capacity_used > aNode[i]:
+            print(f"Constraint 1 failed")
+            return False
 
     # Check edge capacity constraints
-
-    if not all (pl.lpSum(get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * rEdge.get((v, w), 0) for (v, w) in subgraph.edges) <= aEdge[(i, j)] * get_var(f'phi_{s}_{k}') 
-                         for (i,j) in PHY.nodes):
-        print(f"Constraint 2 failed)")
-        return False
+    for (i, j) in PHY.edges:
+        edge_capacity_used = sum(
+            get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * subgraph.edges[v, w]['r']
+            for s, slice_config in enumerate(slices)
+            for k, subgraph in enumerate(slice_config)
+            for (v, w) in subgraph.edges
+        )
+        if edge_capacity_used > aEdge[(i, j)]:
+            print(f"Constraint 2 failed")
+            return False
 
     # Check one virtual node per physical node per slice constraint
     for s, slice_config in enumerate(slices):
