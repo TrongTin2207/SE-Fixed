@@ -20,8 +20,6 @@ def check_solution(problem, slices, PHY):
     # Extract node and edge attributes from the physical network
     aNode = nx.get_node_attributes(PHY, "a")
     aEdge = nx.get_edge_attributes(PHY, "a")
-
-
     
     def get_var(name):
         return variables.get(name, 0)
@@ -93,3 +91,7 @@ def check_solution(problem, slices, PHY):
 
     print("All constraints are satisfied.")
     return True
+
+# Check constraint 6 again
+# If solution violates, return False and escape
+# Changing variables naming 

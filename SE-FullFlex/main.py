@@ -6,7 +6,7 @@ from Validate import *
 def main():
     N_requirements = [10, 10, 10, 10, 10]
     E_requirements = [5, 5, 5, 5]
-    N = create_physical_network(5, N_requirements, E_requirements)
+    PHY = create_physical_network(5, N_requirements, E_requirements)
 
     sizes = [
         [3, 2],
@@ -29,7 +29,7 @@ def main():
         slice_configs = create_slice_configurations(len(sizes[slice_id]), sizes[slice_id], node_requirements[slice_id], edge_requirements[slice_id])
         slices.append(slice_configs)
 
-    ilp_problem = build_ilp_problem(slices, N)
+    ilp_problem = build_ilp_problem(slices, PHY)
 
     ilp_problem.solve()
 
@@ -39,6 +39,6 @@ def main():
     print(f'Optimal value: {pl.value(ilp_problem.objective)}')
     print(pl.LpStatus[ilp_problem.status])
     
-    check_solution(ilp_problem, slices, N)
+    check_solution(ilp_problem, slices, PHY)
 if __name__ == '__main__':
     main()
