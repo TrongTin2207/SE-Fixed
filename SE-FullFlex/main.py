@@ -34,11 +34,17 @@ def main():
     ilp_problem.solve()
 
     ilp_problem.writeLP("FullFlexSolution.lp")
-    for var in ilp_problem.variables():
-        print(f'{var.name}: {var.varValue}')
-    print(f'Optimal value: {pl.value(ilp_problem.objective)}')
-    print(pl.LpStatus[ilp_problem.status])
+
+    save_solution(ilp_problem, 'problem.pkl')
+    loaded_problem = load_solution('problem.pkl')
+    result = check_solution(loaded_problem, slices, PHY)
+    print(f'Constraint satisfied: {result}')
     
-    check_solution(ilp_problem, slices, PHY)
+    if result == True:
+        for var in ilp_problem.variables():
+            print(f'{var.name}: {var.varValue}')
+        print(f'Optimal value: {pl.value(ilp_problem.objective)}')
+        print(pl.LpStatus[ilp_problem.status])
+    
 if __name__ == '__main__':
     main()

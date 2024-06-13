@@ -1,6 +1,6 @@
-import networkx as nx 
+import networkx as nx
 import pulp as pl
-from common import *
+import pickle
 
 def check_solution(problem, slices, PHY):
     """
@@ -16,7 +16,7 @@ def check_solution(problem, slices, PHY):
     """
     # Extract the variables from the solved problem
     variables = {v.name: v.varValue for v in problem.variables()}
-
+    
     # Extract node and edge attributes from the physical network
     aNode = nx.get_node_attributes(PHY, "a")
     aEdge = nx.get_edge_attributes(PHY, "a")
@@ -24,74 +24,97 @@ def check_solution(problem, slices, PHY):
     def get_var(name):
         return variables.get(name, 0)
     
-       # Check node capacity constraints
-    for i in PHY.nodes:
-        node_capacity_used = sum(
-            get_var(f'xNode_{s}_{k}_{i}_{v}') * subgraph.nodes[v]['r']
-            for s, slice_config in enumerate(slices)
-            for k, subgraph in enumerate(slice_config)
-            for v in subgraph.nodes
-        )
-        if node_capacity_used > aNode[i]:
-            print(f"Constraint 1 failed")
-            return False
+    # Pre-compute node and edge capacity usage
+    node_capacity_used = {i: 0 for i in PHY.nodes}
+    edge_capacity_used = {edge: 0 for edge in PHY.edges}
 
-    # Check edge capacity constraints
-    for (i, j) in PHY.edges:
-        edge_capacity_used = sum(
-            get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * subgraph.edges[v, w]['r']
-            for s, slice_config in enumerate(slices)
-            for k, subgraph in enumerate(slice_config)
-            for (v, w) in subgraph.edges
-        )
-        if edge_capacity_used > aEdge[(i, j)]:
-            print(f"Constraint 2 failed")
-            return False
-
-    # Check one virtual node per physical node per slice constraint
     for s, slice_config in enumerate(slices):
         for k, subgraph in enumerate(slice_config):
             for i in PHY.nodes:
-                total_virtual_nodes = sum(get_var(f'xNode_{s}_{k}_{i}_{v}') for v in subgraph.nodes)
-                if total_virtual_nodes > get_var(f'z_{s}_{k}'):
-                    print(f"Constraint 3 failed")
-                    return False
+                for v in subgraph.nodes:
+                    node_capacity_used[i] += get_var(f'xNode_{s}_{k}_{i}_{v}') * subgraph.nodes[v]['r']
+            for (i, j) in PHY.edges:
+                for (v, w) in subgraph.edges:
+                    edge_capacity_used[(i, j)] += get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') * subgraph.edges[v, w]['r']
 
-    # Check each virtual node mapped to exactly one physical node if chosen    
-    if not all (pl.lpSum(get_var(f'xNode_{s}_{k}_{i}_{v}') for v in subgraph.nodes 
-                                     for i in PHY.nodes)):
-        print(f"Constraint 4 failed")
+    # Check node capacity constraints (C1)
+    if not all(node_capacity_used[i] <= aNode[i] for i in PHY.nodes):
+        print(f"Constraint 1 violated.")
         return False
 
-    # Check flow conservation constraints
+    # Check edge capacity constraints (C2)
+    if not all(edge_capacity_used[(i, j)] <= aEdge[(i, j)] for (i, j) in PHY.edges):
+        print(f"Constraint 2 violated.")
+        return False
+
+    # Check one virtual node per physical node per slice constraint (C3)
+    if not all(
+        sum(get_var(f'xNode_{s}_{k}_{i}_{v}') for v in subgraph.nodes) <= get_var(f'z_{s}_{k}')
+        for s, slice_config in enumerate(slices)
+        for k, subgraph in enumerate(slice_config)
+        for i in PHY.nodes
+    ):
+        print(f"Constraint 3 failed.")
+        return False
+
+    # Check each virtual node mapped to exactly one physical node if chosen (C4)
+    if not all(
+        sum(get_var(f'xNode_{s}_{k}_{i}_{v}') for i in PHY.nodes) == get_var(f'z_{s}_{k}')
+        for s, slice_config in enumerate(slices)
+        for k, subgraph in enumerate(slice_config)
+        for v in subgraph.nodes
+    ):
+        print(f"Constraint 4 failed.")
+        return False
+
+    # Check flow conservation constraints (C5)
     M = 100  # Big-M value for relaxation
-    for (v, w) in subgraph.edges:
-        for (i, j) in PHY.edges:
-            lhs = get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') - get_var(f'xEdge_{s}_{k}_{j}_{i}_{v}_{w}') - (get_var(f'xNode_{s}_{k}_{i}_{v}') - get_var(f'xNode_{s}_{k}_{j}_{v}'))
-            if not (-M * (1 - get_var(f'phi_{s}_{k}')) <= lhs <= M * (1 - get_var(f'phi_{s}_{k}'))):
-                print(f"Constraint 5")
-                return False
+    if not all(
+        -M * (1 - get_var(f'phi_{s}_{k}')) <= 
+        get_var(f'xEdge_{s}_{k}_{i}_{j}_{v}_{w}') - 
+        get_var(f'xEdge_{s}_{k}_{j}_{i}_{v}_{w}') - 
+        (get_var(f'xNode_{s}_{k}_{i}_{v}') - get_var(f'xNode_{s}_{k}_{j}_{v}')) <= 
+        M * (1 - get_var(f'phi_{s}_{k}'))
+        for s, slice_config in enumerate(slices)
+        for k, subgraph in enumerate(slice_config)
+        for (v, w) in subgraph.edges
+        for (i, j) in PHY.edges
+    ):
+        print(f"Constraint 5 violated.")
+        return False
 
-    # Check exactly one configuration chosen per slice
-    for s in range(len(slices)):
-        total_configurations = sum(get_var(f'phi_{s}_{k}') for k in range(len(slices[s])))
-        if total_configurations != get_var(f'pi_{s}'):
-            print(f"Constraint 6 failed")
-            return False
+    # Check exactly one configuration chosen per slice (C6)
+    if not all(
+        sum(get_var(f'phi_{s}_{k}') for k in range(len(slice_config))) == get_var(f'pi_{s}_{k}')
+        for s, slice_config in enumerate(slices)
+    ):
+        print(f"Constraint 6 violated.")
+        return False
 
-    # Check consistency between z, pi, and phi variables
-    for s in range(len(slices)):
-        for k in range(len(slices[s])):
-            z_var = get_var(f'z_{s}_{k}')
-            pi_var = get_var(f'pi_{s}')
-            phi_var = get_var(f'phi_{s}_{k}')
-            if z_var > pi_var or z_var > phi_var or z_var < pi_var + phi_var - 1:
-                print(f"Constraint 7 failed")
-                return False
+
+    # Check consistency between z, pi, and phi variables (C7)
+    if not all(
+        get_var(f'z_{s}_{k}') <= get_var(f'pi_{s}') and
+        get_var(f'z_{s}_{k}') <= get_var(f'phi_{s}_{k}') and
+        get_var(f'z_{s}_{k}') >= get_var(f'pi_{s}') + get_var(f'phi_{s}_{k}') - 1
+        for s in range(len(slices))
+        for k in range(len(slices[s]))
+    ):
+        print(f"Constraint 7 violated.")
+        return False
 
     print("All constraints are satisfied.")
     return True
 
-# Check constraint 6 again
-# If solution violates, return False and escape
-# Changing variables naming 
+def save_solution(problem, filepath):
+    with open(filepath, 'wb') as f:
+        pickle.dump(problem, f)
+
+def load_solution(filepath):
+    with open(filepath, 'rb') as f:
+        return pickle.load(f)
+
+# Example usage:
+# save_solution(problem, 'problem.pkl')
+# loaded_problem = load_solution('problem.pkl')
+# result = check_solution(loaded_problem, slices, PHY)
